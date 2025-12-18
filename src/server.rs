@@ -28,82 +28,82 @@ impl Server {
   }
 
   pub fn start(self) {
-    // Set up panic hook to gracefully handle broken pipe errors
-    let default_panic = panic::take_hook();
-    panic::set_hook(Box::new(move |panic_info| {
-      // Check if this is a broken pipe error and just log it
-      let payload = panic_info.payload();
-      if let Some(s) = payload.downcast_ref::<String>() {
-        if s.contains("Broken pipe") || s.contains("BrokenPipe") {
-          warn!("Client disconnected (broken pipe) - this is normal");
-          return;
-        }
-      } else if let Some(s) = payload.downcast_ref::<&str>() {
-        if s.contains("Broken pipe") || s.contains("BrokenPipe") {
-          warn!("Client disconnected (broken pipe) - this is normal");
-          return;
-        }
-      }
-      // For other panics, use the default handler
-      default_panic(panic_info);
-    }));
+    let host = self.config.host.clone();
+    let port = self.config.port.clone();
+
+    info!("{:?}", &self.config);
 
     let serv = Arc::new(self);
-    let s = serv.clone();
 
-    let server = simple_server::Server::new(move |request, mut response| {
-      info!("Request received. {} {}", request.method(), request.uri());
+    // Restart loop to handle thread pool panics from broken pipe errors
+    loop {
+      let s = serv.clone();
 
-      // Catch panics to prevent broken pipe errors from crashing the server
-      let result = panic::catch_unwind(panic::AssertUnwindSafe(|| -> ResponseResult {
-        let s = serv.as_ref();
-        let routes = Arc::new(s.routes.as_ref());
+      let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let serv_inner = s.clone();
+        let server = simple_server::Server::new(move |request, mut response| {
+          info!("Request received. {} {}", request.method(), request.uri());
 
-        if request.method() == Method::OPTIONS {
-          return Ok(
-            response
-              .status(StatusCode::NO_CONTENT)
-              .header("Access-Control-Allow-Origin", "https://www.figma.com")
-              .header("Access-Control-Allow-Private-Network", "true")
-              .header("Content-Type", "application/octet-stream")
-              .body("".as_bytes().to_vec())?,
-          );
-        }
+          let s = serv_inner.as_ref();
+          let routes = Arc::new(s.routes.as_ref());
 
-        for route in *routes {
-          if route.method == request.method() && route.path == request.uri().path() {
-            let handler = &(route.handler).as_ref();
-            return handler(request, response, &s.config);
+          if request.method() == Method::OPTIONS {
+            return Ok(
+              response
+                .status(StatusCode::NO_CONTENT)
+                .header("Access-Control-Allow-Origin", "https://www.figma.com")
+                .header("Access-Control-Allow-Private-Network", "true")
+                .header("Content-Type", "application/octet-stream")
+                .body("".as_bytes().to_vec())?,
+            );
           }
-        }
 
-        any::handler(request, response)
+          for route in *routes {
+            if route.method == request.method() && route.path == request.uri().path() {
+              let handler = &(route.handler).as_ref();
+              return handler(request, response, &s.config);
+            }
+          }
+
+          any::handler(request, response)
+        });
+
+        server.listen(&host, &port);
       }));
 
       match result {
-        Ok(r) => r,
+        Ok(_) => {
+          // Server stopped cleanly
+          warn!("Server stopped unexpectedly");
+          break;
+        }
         Err(e) => {
-          // Log the panic but don't crash - this is usually a broken pipe
-          if let Some(s) = e.downcast_ref::<&str>() {
-            warn!("Request handler panicked: {}", s);
-          } else if let Some(s) = e.downcast_ref::<String>() {
-            warn!("Request handler panicked: {}", s);
+          // Check if this is a thread pool panic from broken pipe
+          let is_thread_pool_panic = if let Some(s) = e.downcast_ref::<String>() {
+            s.contains("Thread pool worker panicked")
+              || s.contains("Broken pipe")
+              || s.contains("BrokenPipe")
+          } else if let Some(s) = e.downcast_ref::<&str>() {
+            s.contains("Thread pool worker panicked")
+              || s.contains("Broken pipe")
+              || s.contains("BrokenPipe")
           } else {
-            warn!("Request handler panicked with unknown error");
+            false
+          };
+
+          if is_thread_pool_panic {
+            warn!("Client disconnected (broken pipe) - restarting server");
+            // Brief pause before restart
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            continue;
+          } else {
+            // Some other panic - log it and stop
+            warn!("Server panicked with unexpected error - stopping");
+            panic::resume_unwind(e);
           }
-          // Can't send a response since the handler already consumed the ResponseBuilder
-          // and the client likely disconnected anyway. Return a dummy error.
-          Err(simple_server::Error::from(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Handler panicked",
-          )))
         }
       }
-    });
-
-    info!("{:?}", &s.config);
-
-    server.listen(&s.config.host, &s.config.port);
+    }
   }
 }
 
