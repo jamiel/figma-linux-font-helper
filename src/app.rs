@@ -4,6 +4,7 @@ use super::server;
 
 pub fn init() {
   server::Server::new(Config::new())
+    .add_route(version::init())
     .add_route(get_files::init())
     .add_route(get_file::init())
     .start();

@@ -25,7 +25,7 @@ fn default_host() -> String {
   "127.0.0.1".to_string()
 }
 fn default_port() -> String {
-  "18412".to_string()
+  "44950".to_string()
 }
 
 impl fmt::Debug for Config {
@@ -59,7 +59,7 @@ impl Config {
   fn parse_config_file() -> Config {
     let mut config = Config {
       host: "127.0.0.1".to_owned(),
-      port: "18412".to_owned(),
+      port: "44950".to_owned(),
       app: AppConfig {
         font_dirs: vec![String::from("/usr/share/fonts")],
       },
