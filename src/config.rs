@@ -61,7 +61,10 @@ impl Config {
       host: "127.0.0.1".to_owned(),
       port: "44950".to_owned(),
       app: AppConfig {
-        font_dirs: vec![String::from("/usr/share/fonts")],
+        font_dirs: vec![
+          String::from("/usr/share/fonts"),
+          String::from("/usr/local/share/fonts"),
+        ],
       },
     };
 
